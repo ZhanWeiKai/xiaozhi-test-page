@@ -32,12 +32,22 @@ export class VADDetector {
         this.mediaStream = null;
         this.detectTimer = null;
 
+        // 预缓冲相关
+        this.preBufferSize = options.preBufferSize ?? 1000;  // 预缓冲大小 (ms)
+        this.sampleRate = 16000;  // 采样率
+        this.pcmBuffer = null;    // 环形缓冲区
+        this.bufferWriteIndex = 0;  // 写入位置
+        this.bufferedSamples = 0;   // 已缓冲的样本数
+        this.audioProcessor = null; // 音频处理器
+        this.audioSourceNode = null; // 音频源节点
+
         // 回调函数
         this.onVolumeChange = null;        // 音量变化回调 (volume) => {}
         this.onSpeakingChange = null;      // 说话状态变化回调 (isSpeaking, duration) => {}
         this.onSilenceChange = null;       // 静音状态变化回调 (duration) => {}
         this.onStartRecording = null;      // 触发开始录音回调 () => {}
         this.onStopRecording = null;       // 触发停止录音回调 () => {}
+        this.onBufferedAudio = null;       // 缓冲音频回调 (pcmData) => {} - 返回预缓冲的音频
         this.onTriggerPredict = null;      // 触发预测回调 (prediction) => {}
         this.onError = null;               // 错误回调 (error) => {}
     }
@@ -63,8 +73,17 @@ export class VADDetector {
                 }
             });
 
-            // 创建 AudioContext
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            // 创建 AudioContext - 使用16kHz采样率以匹配Opus编码器
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000,
+                latencyHint: 'interactive'
+            });
+
+            // 验证采样率
+            log(`VAD AudioContext 采样率: ${this.audioContext.sampleRate}Hz`, 'info');
+            if (this.audioContext.sampleRate !== 16000) {
+                log(`警告: 浏览器不支持16kHz采样率，使用 ${this.audioContext.sampleRate}Hz`, 'warning');
+            }
 
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
@@ -87,6 +106,16 @@ export class VADDetector {
             this.silenceStartTime = null;
             this.speakingDuration = 0;
             this.silenceDuration = 0;
+
+            // 初始化预缓冲区
+            this.sampleRate = this.audioContext.sampleRate;
+            const bufferSamples = Math.floor(this.sampleRate * this.preBufferSize / 1000);
+            this.pcmBuffer = new Int16Array(bufferSamples);
+            this.bufferWriteIndex = 0;
+            this.bufferedSamples = 0;
+
+            // 创建音频处理器用于采集PCM数据
+            this._createAudioProcessor();
 
             // 开始检测循环
             this._startDetection();
@@ -114,6 +143,13 @@ export class VADDetector {
         if (this.detectTimer) {
             clearInterval(this.detectTimer);
             this.detectTimer = null;
+        }
+
+        // 释放音频处理器
+        if (this.audioProcessor) {
+            this.audioProcessor.disconnect();
+            this.audioProcessor.onaudioprocess = null;
+            this.audioProcessor = null;
         }
 
         // 释放音频资源
@@ -147,6 +183,11 @@ export class VADDetector {
         this.speakingDuration = 0;
         this.silenceDuration = 0;
         this.currentVolume = 0;
+
+        // 重置预缓冲
+        this.pcmBuffer = null;
+        this.bufferWriteIndex = 0;
+        this.bufferedSamples = 0;
 
         log('VAD停止监听', 'info');
     }
@@ -291,6 +332,101 @@ export class VADDetector {
     }
 
     /**
+     * 创建音频处理器用于采集PCM数据
+     * @private
+     */
+    _createAudioProcessor() {
+        // 使用 ScriptProcessorNode 采集 PCM 数据
+        // bufferSize: 4096 样本，在 16kHz 采样率下约 256ms
+        const bufferSize = 4096;
+        this.audioProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+        this.audioProcessor.onaudioprocess = (event) => {
+            if (!this.isListening) return;
+
+            const inputData = event.inputBuffer.getChannelData(0);
+            this._bufferPCMData(inputData);
+        };
+
+        // 连接音频源到处理器（不连接到destination，避免回声）
+        this.audioSourceNode = this.microphone;
+        this.audioSourceNode.connect(this.audioProcessor);
+        // 注意：ScriptProcessorNode需要连接到destination才能工作，但我们把音量设为0
+        const silentGain = this.audioContext.createGain();
+        silentGain.gain.value = 0;
+        this.audioProcessor.connect(silentGain);
+        silentGain.connect(this.audioContext.destination);
+
+        log(`VAD音频处理器已创建，预缓冲大小: ${this.preBufferSize}ms`, 'info');
+    }
+
+    /**
+     * 将PCM数据存入环形缓冲区
+     * @param {Float32Array} float32Data 浮点音频数据
+     * @private
+     */
+    _bufferPCMData(float32Data) {
+        if (!this.pcmBuffer) return;
+
+        // 将 Float32 (-1.0 ~ 1.0) 转换为 Int16 (-32768 ~ 32767)
+        for (let i = 0; i < float32Data.length; i++) {
+            const sample = Math.max(-1, Math.min(1, float32Data[i]));
+            const int16Sample = Math.round(sample < 0 ? sample * 0x8000 : sample * 0x7FFF);
+
+            this.pcmBuffer[this.bufferWriteIndex] = int16Sample;
+            this.bufferWriteIndex = (this.bufferWriteIndex + 1) % this.pcmBuffer.length;
+
+            if (this.bufferedSamples < this.pcmBuffer.length) {
+                this.bufferedSamples++;
+            }
+        }
+
+        // 【DEBUG LOG】打印 PCM 缓冲区统计信息
+        if (this.bufferedSamples > 0) {
+            let min = 32767, max = -32768, sum = 0;
+            const checkCount = Math.min(100, this.bufferedSamples); // 采样前100个样本
+            const startIndex = (this.bufferWriteIndex - checkCount + this.pcmBuffer.length) % this.pcmBuffer.length;
+            for (let i = 0; i < checkCount; i++) {
+                const idx = (startIndex + i) % this.pcmBuffer.length;
+                const val = this.pcmBuffer[idx];
+                if (val < min) min = val;
+                if (val > max) max = val;
+                sum += Math.abs(val);
+            }
+            const avgAbs = Math.round(sum / checkCount);
+            console.log(`[VAD PCM缓冲区] 样本数:${this.bufferedSamples}, 写入位置:${this.bufferWriteIndex}, ` +
+                `最近${checkCount}样本: min=${min}, max=${max}, 平均绝对值=${avgAbs}, ` +
+                `音量估算=${Math.round(avgAbs / 32768 * 100)}%`);
+        }
+    }
+
+    /**
+     * 获取预缓冲的PCM数据
+     * @returns {Int16Array|null} 预缓冲的PCM数据
+     * @private
+     */
+    _getBufferedAudio() {
+        if (!this.pcmBuffer || this.bufferedSamples === 0) {
+            return null;
+        }
+
+        // 创建结果数组
+        const result = new Int16Array(this.bufferedSamples);
+
+        // 计算读取起始位置（环形缓冲区中最早的数据）
+        const startIndex = (this.bufferWriteIndex - this.bufferedSamples + this.pcmBuffer.length) % this.pcmBuffer.length;
+
+        // 从环形缓冲区复制数据
+        for (let i = 0; i < this.bufferedSamples; i++) {
+            const readIndex = (startIndex + i) % this.pcmBuffer.length;
+            result[i] = this.pcmBuffer[readIndex];
+        }
+
+        log(`VAD提取预缓冲音频: ${this.bufferedSamples} 样本, ${(this.bufferedSamples / this.sampleRate * 1000).toFixed(0)}ms`, 'info');
+        return result;
+    }
+
+    /**
      * 处理静音状态
      * @param {number} now 当前时间戳
      * @private
@@ -337,6 +473,15 @@ export class VADDetector {
         this.isRecording = true;
         const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
         log(`[${timestamp}] VAD触发【开始录音】`, 'success');
+
+        // 先发送预缓冲的音频数据
+        if (this.onBufferedAudio) {
+            const bufferedData = this._getBufferedAudio();
+            if (bufferedData) {
+                log(`[${timestamp}] 发送预缓冲音频: ${bufferedData.length} 样本`, 'info');
+                this.onBufferedAudio(bufferedData);
+            }
+        }
 
         if (this.onStartRecording) {
             this.onStartRecording();

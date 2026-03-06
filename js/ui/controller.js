@@ -367,9 +367,9 @@ export class UIController {
 
         // 创建VAD检测器，设置参数
         this.vad = getVADDetector({
-            volumeThreshold: 8,     // 音量阈值
+            volumeThreshold: 12,    // 音量阈值
             startDelay: 200,        // 开始触发延迟 200ms
-            stopDelay: 1500         // 停止触发延迟 1500ms
+            stopDelay: 1200         // 停止触发延迟 1200ms
         });
 
         // 设置VAD回调
@@ -381,6 +381,11 @@ export class UIController {
             if (!audioRecorder.isRecording) {
                 audioRecorder.start();
             }
+        };
+
+        this.vad.onBufferedAudio = (pcmData) => {
+            // 发送预缓冲的音频数据
+            audioRecorder.sendBufferedAudio(pcmData);
         };
 
         this.vad.onStopRecording = () => {

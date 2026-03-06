@@ -3,6 +3,9 @@ import { log } from '../../utils/logger.js';
 import { initOpusEncoder } from './opus-codec.js';
 import { getAudioPlayer } from './player.js';
 
+// 模块级别的AudioWorklet注册状态追踪
+let workletRegistered = false;
+
 // 音频录制器类
 export class AudioRecorder {
     constructor() {
@@ -110,10 +113,15 @@ export class AudioRecorder {
 
         try {
             if (this.audioContext.audioWorklet) {
-                const blob = new Blob([this.getAudioProcessorCode()], { type: 'application/javascript' });
-                const url = URL.createObjectURL(blob);
-                await this.audioContext.audioWorklet.addModule(url);
-                URL.revokeObjectURL(url);
+                // 只在第一次注册AudioWorklet
+                if (!workletRegistered) {
+                    const blob = new Blob([this.getAudioProcessorCode()], { type: 'application/javascript' });
+                    const url = URL.createObjectURL(blob);
+                    await this.audioContext.audioWorklet.addModule(url);
+                    URL.revokeObjectURL(url);
+                    workletRegistered = true;
+                    log('AudioWorklet处理器已注册', 'info');
+                }
 
                 const audioProcessor = new AudioWorkletNode(this.audioContext, 'audio-recorder-processor');
 
@@ -424,6 +432,72 @@ export class AudioRecorder {
     // 获取分析器
     getAnalyser() {
         return this.analyser;
+    }
+
+    /**
+     * 发送预缓冲的PCM音频数据
+     * @param {Int16Array} pcmData PCM音频数据
+     */
+    async sendBufferedAudio(pcmData) {
+        if (!pcmData || pcmData.length === 0) {
+            log('没有预缓冲音频数据可发送', 'warning');
+            return;
+        }
+
+        // 确保编码器已初始化
+        if (!this.opusEncoder) {
+            this.initEncoder();
+            if (!this.opusEncoder) {
+                log('Opus编码器初始化失败，无法发送预缓冲音频', 'error');
+                return;
+            }
+        }
+
+        // 获取WebSocket连接
+        if (!this.websocket) {
+            const { getWebSocketHandler } = await import('../network/websocket.js');
+            const wsHandler = getWebSocketHandler();
+            if (wsHandler && wsHandler.websocket) {
+                this.websocket = wsHandler.websocket;
+            }
+        }
+
+        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+            log('WebSocket未连接，无法发送预缓冲音频', 'error');
+            return;
+        }
+
+        const samplesPerFrame = 960;
+        let offset = 0;
+
+        log(`开始发送预缓冲音频: ${pcmData.length} 样本, ${(pcmData.length / 16000 * 1000).toFixed(0)}ms`, 'info');
+
+        while (offset < pcmData.length) {
+            const remainingSamples = pcmData.length - offset;
+            let frameData;
+
+            if (remainingSamples >= samplesPerFrame) {
+                frameData = pcmData.slice(offset, offset + samplesPerFrame);
+                offset += samplesPerFrame;
+            } else {
+                // 最后一帧不足960样本，填充0
+                frameData = new Int16Array(samplesPerFrame);
+                frameData.set(pcmData.slice(offset));
+                offset = pcmData.length;
+            }
+
+            try {
+                const opusData = this.opusEncoder.encode(frameData);
+                if (opusData && opusData.length > 0) {
+                    this.websocket.send(opusData.buffer);
+                    log(`发送预缓冲Opus帧，大小：${opusData.length}字节`, 'debug');
+                }
+            } catch (error) {
+                log(`预缓冲音频编码错误: ${error.message}`, 'error');
+            }
+        }
+
+        log('预缓冲音频发送完成', 'success');
     }
 }
 
