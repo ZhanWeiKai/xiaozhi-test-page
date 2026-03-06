@@ -1,0 +1,34 @@
+::1 - - [28/Jan/2026 15:30:19] "GET /test_page.html HTTP/1.1" 304 -
+::1 - - [28/Jan/2026 15:30:20] code 404, message File not found
+::1 - - [28/Jan/2026 15:30:20] "GET /favicon.ico HTTP/1.1" 404 -
+::1 - - [28/Jan/2026 15:47:36] "GET /test_page.html HTTP/1.1" 304 -
+::1 - - [28/Jan/2026 15:48:38] code 404, message File not found
+::1 - - [28/Jan/2026 15:48:38] "GET /favicon.ico HTTP/1.1" 404 -
+::1 - - [28/Jan/2026 15:48:38] code 404, message File not found
+::1 - - [28/Jan/2026 15:48:38] "GET /favicon.ico HTTP/1.1" 404 -
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\ProgramData\miniconda3\Lib\http\server.py", line 1345, in <module>
+    test(
+    ~~~~^
+        HandlerClass=handler_class,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        protocol=args.protocol,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\ProgramData\miniconda3\Lib\http\server.py", line 1300, in test
+    httpd.serve_forever()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\ProgramData\miniconda3\Lib\socketserver.py", line 235, in serve_forever
+    ready = selector.select(poll_interval)
+  File "C:\ProgramData\miniconda3\Lib\selectors.py", line 314, in select
+    r, w, _ = self._select(self._readers, self._writers, [], timeout)
+              ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\miniconda3\Lib\selectors.py", line 305, in _select
+    r, w, x = select.select(r, w, w, timeout)
+              ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+OSError: [WinError 10055] An operation on a socket could not be performed because the system lacked sufficient buffer space or because a queue was full
+Serving HTTP on :: port 8006 (http://[::]:8006/) ...
