@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音量检测测试页面 - VAD</title>
+    <link rel="stylesheet" href="css/test_voice.css">
+    <script>
+        // 检测是否使用file://协议打开
+        if (window.location.protocol === 'file:') {
+            document.addEventListener('DOMContentLoaded', function () {
+                const warningDiv = document.createElement('div');
+                warningDiv.id = 'fileProtocolWarning';
+                warningDiv.innerHTML = `
+                    <h2>⚠️ 警告：请使用HTTP服务器打开此页面</h2>
+                    <p>您当前使用的是本地文件方式打开页面（file://协议），这可能导致页面功能异常。</p>
+                    <p>请按照以下步骤使用python启动测试http服务：</p>
+                    <ol>
+                        <li>打开命令行终端</li>
+                        <li>命令行进入到 test 目录</li>
+                        <li>执行以下命令启动HTTP服务器：</li>
+                    </ol>
+                    <pre>python -m http.server 8006</pre>
+                    <p>然后在浏览器中访问：<strong>http://localhost:8006/test_voice.html</strong></p>
+                `;
+                document.body.appendChild(warningDiv);
+            });
+        }
+    </script>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔊 音量检测测试页面</h1>
+        <p class="subtitle">用于调试 VAD 自动录音的阈值参数</p>
+
+        <!-- 音量显示区域 -->
+        <div class="section">
+            <h2>📊 音量监测</h2>
+
+            <div class="volume-display">
+                <div class="volume-bar-container">
+                    <div class="volume-bar" id="volumeBar">
+                        <div class="volume-fill" id="volumeFill"></div>
+                        <div class="volume-threshold" id="volumeThreshold"></div>
+                    </div>
+                    <div class="volume-value" id="volumeValue">0</div>
+                </div>
+            </div>
+
+            <div class="threshold-control">
+                <label for="thresholdSlider">音量阈值:</label>
+                <input type="range" id="thresholdSlider" min="0" max="100" value="30">
+                <span id="thresholdValue">30</span>
+            </div>
+        </div>
+
+        <!-- 状态监测区域 -->
+        <div class="section">
+            <h2>📡 状态监测</h2>
+
+            <div class="status-grid">
+                <div class="status-item">
+                    <span class="status-label">当前状态:</span>
+                    <span class="status-value" id="currentStatus">
+                        <span class="status-icon">🔇</span>
+                        <span class="status-text">等待开始</span>
+                    </span>
+                </div>
+
+                <div class="status-item">
+                    <span class="status-label">连续说话时长:</span>
+                    <span class="status-value" id="speakingDuration">0 ms</span>
+                </div>
+
+                <div class="status-item">
+                    <span class="status-label">连续静音时长:</span>
+                    <span class="status-value" id="silenceDuration">0 ms</span>
+                </div>
+
+                <div class="status-item">
+                    <span class="status-label">录音状态:</span>
+                    <span class="status-value" id="recordingStatus">未录音</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 触发预测区域 -->
+        <div class="section">
+            <h2>🎯 触发预测</h2>
+
+            <div class="prediction-container">
+                <div class="prediction-item">
+                    <div class="prediction-header">
+                        <span class="prediction-title">开始录音</span>
+                        <span class="prediction-condition">条件: 音量 &gt; <span id="startThreshold">30</span> 持续 <span id="startDelay">200</span>ms</span>
+                    </div>
+                    <div class="prediction-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="startProgress"></div>
+                        </div>
+                        <span class="progress-text" id="startProgressText">0 / 200 ms</span>
+                    </div>
+                    <div class="prediction-status" id="startPredictionStatus">等待说话...</div>
+                </div>
+
+                <div class="prediction-item">
+                    <div class="prediction-header">
+                        <span class="prediction-title">停止录音</span>
+                        <span class="prediction-condition">条件: 音量 &lt; <span id="stopThreshold">30</span> 持续 <span id="stopDelay">1000</span>ms</span>
+                    </div>
+                    <div class="prediction-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="stopProgress"></div>
+                        </div>
+                        <span class="progress-text" id="stopProgressText">0 / 1000 ms</span>
+                    </div>
+                    <div class="prediction-status" id="stopPredictionStatus">需要先开始录音</div>
+                </div>
+            </div>
+
+            <div class="trigger-alert" id="triggerAlert">
+                <!-- 即将触发的提示会动态显示在这里 -->
+            </div>
+        </div>
+
+        <!-- 模拟录音按钮区域 -->
+        <div class="section">
+            <h2>🎙️ 模拟录音按钮</h2>
+            <p class="section-desc">VAD触发时，按钮会自动切换状态</p>
+
+            <div class="simulate-button-container">
+                <button class="simulate-record-btn" id="simulateRecordBtn">
+                    <span class="btn-icon">🎤</span>
+                    <span class="btn-text">开始录音</span>
+                </button>
+            </div>
+
+            <div class="auto-detect-toggle">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autoDetectToggle">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label" id="autoDetectLabel">自动录音检测: 关闭</span>
+            </div>
+
+            <div class="simulate-status" id="simulateStatus">
+                <span class="status-indicator"></span>
+                <span class="status-text">等待说话...</span>
+            </div>
+        </div>
+
+        <!-- 参数配置区域 -->
+        <div class="section">
+            <h2>⚙️ 参数配置</h2>
+
+            <div class="config-grid">
+                <div class="config-item">
+                    <label for="startDelaySlider">开始触发延迟:</label>
+                    <input type="range" id="startDelaySlider" min="50" max="1000" value="200" step="50">
+                    <span id="startDelayValue">200 ms</span>
+                </div>
+
+                <div class="config-item">
+                    <label for="stopDelaySlider">停止触发延迟:</label>
+                    <input type="range" id="stopDelaySlider" min="100" max="3000" value="1000" step="100">
+                    <span id="stopDelayValue">1000 ms</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 触发日志区域 -->
+        <div class="section">
+            <h2>
+                📝 触发日志
+                <button class="clear-log-btn" id="clearLogBtn">清空日志</button>
+            </h2>
+
+            <div class="log-container" id="logContainer">
+                <div class="log-entry log-info">准备就绪，点击"开始监听"按钮开始测试...</div>
+            </div>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div class="control-buttons">
+            <button class="control-btn start-btn" id="startBtn">🎤 开始监听</button>
+            <button class="control-btn stop-btn" id="stopBtn" disabled>⏹️ 停止监听</button>
+        </div>
+    </div>
+
+    <script type="module" src="js/test_voice.js"></script>
+</body>
+
+</html>

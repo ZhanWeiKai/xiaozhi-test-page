@@ -3,6 +3,7 @@ import { loadConfig, saveConfig } from '../config/manager.js';
 import { getAudioRecorder } from '../core/audio/recorder.js';
 import { getWebSocketHandler } from '../core/network/websocket.js';
 import { getAudioPlayer } from '../core/audio/player.js';
+import { getVADDetector } from '../core/audio/vad.js';
 
 // UI控制器类
 export class UIController {
@@ -11,6 +12,8 @@ export class UIController {
         this.visualizerCanvas = null;
         this.visualizerContext = null;
         this.audioStatsTimer = null;
+        this.isAutoRecordEnabled = false;  // 自动录音检测开关
+        this.vad = null;  // VAD检测器
     }
 
     // 初始化
@@ -321,6 +324,9 @@ export class UIController {
         // 录音按钮
         const recordButton = document.getElementById('recordButton');
         recordButton.addEventListener('click', () => {
+            // 自动录音开启时，禁止手动点击
+            if (this.isAutoRecordEnabled) return;
+
             if (audioRecorder.isRecording) {
                 audioRecorder.stop();
             } else {
@@ -328,8 +334,80 @@ export class UIController {
             }
         });
 
+        // 自动录音检测开关
+        const autoRecordToggle = document.getElementById('autoRecordToggle');
+        if (autoRecordToggle) {
+            autoRecordToggle.addEventListener('change', (e) => {
+                this.toggleAutoRecord(e.target.checked);
+            });
+        }
+
         // 窗口大小变化
         window.addEventListener('resize', () => this.initVisualizer());
+    }
+
+    // 切换自动录音检测
+    async toggleAutoRecord(enabled) {
+        this.isAutoRecordEnabled = enabled;
+
+        if (enabled) {
+            // 开启自动录音检测
+            await this.startVAD();
+        } else {
+            // 关闭自动录音检测
+            this.stopVAD();
+        }
+    }
+
+    // 启动VAD检测
+    async startVAD() {
+        if (this.vad) {
+            this.vad.stop();
+        }
+
+        // 创建VAD检测器，设置参数
+        this.vad = getVADDetector({
+            volumeThreshold: 8,     // 音量阈值
+            startDelay: 200,        // 开始触发延迟 200ms
+            stopDelay: 1500         // 停止触发延迟 1500ms
+        });
+
+        // 设置VAD回调
+        const audioRecorder = getAudioRecorder();
+        const recordButton = document.getElementById('recordButton');
+
+        this.vad.onStartRecording = () => {
+            // VAD触发开始录音 - 直接调用录音器方法
+            if (!audioRecorder.isRecording) {
+                audioRecorder.start();
+            }
+        };
+
+        this.vad.onStopRecording = () => {
+            // VAD触发停止录音 - 直接调用录音器方法
+            if (audioRecorder.isRecording) {
+                audioRecorder.stop();
+            }
+        };
+
+        // 启动VAD监听
+        const success = await this.vad.start();
+        if (success) {
+            recordButton.style.opacity = '0.6';
+            recordButton.style.cursor = 'default';
+        }
+    }
+
+    // 停止VAD检测
+    stopVAD() {
+        if (this.vad) {
+            this.vad.stop();
+            this.vad = null;
+        }
+
+        const recordButton = document.getElementById('recordButton');
+        recordButton.style.opacity = '1';
+        recordButton.style.cursor = 'pointer';
     }
 }
 
