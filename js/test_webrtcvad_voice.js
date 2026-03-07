@@ -10,6 +10,8 @@ class VadComparisonController {
         // Silero VAD (使用 MicVAD)
         this.sileroVad = null;
         this.sileroThreshold = 0.5;
+        this.lastSileroConfidence = 0;  // 记录上次置信度
+        this.sileroFrameCount = 0;       // 帧计数器
 
         // 状态
         this.isListening = false;
@@ -48,6 +50,7 @@ class VadComparisonController {
             sileroThresholdValue: document.getElementById('sileroThresholdValue'),
             sileroStatus: document.getElementById('sileroStatus'),
             sileroLoading: document.getElementById('sileroLoading'),
+            sileroDebugInfo: document.getElementById('sileroDebugInfo'),
 
             // 记录
             recordContainer: document.getElementById('recordContainer'),
@@ -148,17 +151,32 @@ class VadComparisonController {
                     positiveSpeechThreshold: 0.7,   // 提高阈值，需要更高置信度才认为是语音
                     negativeSpeechThreshold: 0.5,   // 相应提高停止阈值
                     minSpeechFrames: 5,             // 至少5帧才触发（约100ms），过滤短促噪音
+                    onFrameProcessed: (probs) => {
+                        // 每帧处理时更新置信度显示
+                        // probs 格式: { isSpeech: number, notSpeech: number }
+                        // 先打印完整对象看看结构
+                        console.log('[Silero VAD] probs:', probs);
+
+                        const prob = probs?.isSpeech ?? probs?.speech ?? 0;
+                        this.updateSileroConfidence(prob);
+
+                        // 在页面上显示调试信息
+                        const status = this.sileroIsSpeaking ? '说话中' : '静音';
+                        this.elements.sileroDebugInfo.textContent = `[Silero VAD] 置信度: ${prob.toFixed(3)}, 状态: ${status}`;
+                    },
                     onSpeechStart: () => {
                         if (!this.sileroIsSpeaking) {
                             this.sileroIsSpeaking = true;
-                            this.addRecord('silero', '开始说话');
+                            this.addRecord('silero', '🎯 开始说话');
                         }
                         this.updateSileroStatus(true);
                     },
-                    onSpeechEnd: () => {
+                    onSpeechEnd: (audio) => {
                         if (this.sileroIsSpeaking) {
                             this.sileroIsSpeaking = false;
-                            this.addRecord('silero', '停止说话');
+                            // 打印录音时长信息
+                            const duration = (audio.length / 16000).toFixed(2);
+                            this.addRecord('silero', `🛑 停止说话 (${duration}s)`);
                         }
                         this.updateSileroStatus(false);
                     }
