@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VAD 对比测试 - 频率分析 vs Silero</title>
+    <link rel="stylesheet" href="css/test_webrtcvad_voice.css">
+    <script>
+        // 检测是否使用file://协议打开
+        if (window.location.protocol === 'file:') {
+            document.addEventListener('DOMContentLoaded', function () {
+                const warningDiv = document.createElement('div');
+                warningDiv.id = 'fileProtocolWarning';
+                warningDiv.innerHTML = `
+                    <h2>⚠️ 警告：请使用HTTP服务器打开此页面</h2>
+                    <p>请按照以下步骤启动HTTP服务器：</p>
+                    <ol>
+                        <li>打开命令行终端，进入 test 目录</li>
+                        <li>执行：<pre>python -m http.server 8007</pre></li>
+                    </ol>
+                    <p>然后访问：<strong>http://localhost:8007/test_webrtcvad_voice.html</strong></p>
+                `;
+                document.body.appendChild(warningDiv);
+            });
+        }
+    </script>
+    <!-- 稳定版本组合: ONNX 1.14.0 + VAD 0.0.22 -->
+    <!-- 1. 先加载 ONNX Runtime (1.14.0 - 稳定版) -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.min.js"></script>
+    <!-- 2. 配置 WASM 路径 (必须在加载 VAD 之前) -->
+    <script>
+        ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/';
+        console.log('✅ ONNX Runtime 1.14.0 + WASM 路径已配置');
+    </script>
+    <!-- 3. 加载 VAD bundle 0.0.22 (稳定版，支持 onSpeechStart/onSpeechEnd) -->
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔊 VAD 对比测试页面</h1>
+        <p class="subtitle">对比「频率分析 VAD」与「Silero VAD」的检测效果</p>
+
+        <!-- 双 VAD 对比区域 -->
+        <div class="vad-comparison">
+            <!-- 左侧：现有频率分析 VAD -->
+            <div class="vad-panel" id="legacyVadPanel">
+                <h2>📊 黑率分析 VAD (现有)</h2>
+                <p class="vad-desc">基于音量阈值检测</p>
+
+                <div class="volume-display">
+                    <div class="volume-bar-container">
+                        <div class="volume-bar">
+                            <div class="volume-fill" id="legacyVolumeFill"></div>
+                            <div class="volume-threshold" id="legacyThreshold"></div>
+                        </div>
+                        <div class="volume-value" id="legacyVolumeValue">0</div>
+                    </div>
+                </div>
+
+                <div class="status-item">
+                    <span class="status-label">状态:</span>
+                    <span class="status-value" id="legacyStatus">🔇 等待开始</span>
+                </div>
+
+                <div class="config-item">
+                    <label>音量阈值:</label>
+                    <input type="range" id="legacyThresholdSlider" min="0" max="100" value="12">
+                    <span id="legacyThresholdValue">12</span>
+                </div>
+            </div>
+
+            <!-- 右侧：Silero VAD -->
+            <div class="vad-panel" id="sileroVadPanel">
+                <h2>🤖 Silero VAD (深度学习)</h2>
+                <p class="vad-desc">基于神经网络模型</p>
+
+                <div class="volume-display">
+                    <div class="volume-bar-container">
+                        <div class="volume-bar">
+                            <div class="volume-fill silero" id="sileroConfidenceFill"></div>
+                            <div class="volume-threshold silero" id="sileroThreshold"></div>
+                        </div>
+                        <div class="volume-value" id="sileroConfidenceValue">0.00</div>
+                    </div>
+                </div>
+
+                <div class="status-item">
+                    <span class="status-label">状态:</span>
+                    <span class="status-value" id="sileroStatus">🔇 等待开始</span>
+                </div>
+
+                <div class="config-item">
+                    <label>语音阈值:</label>
+                    <input type="range" id="sileroThresholdSlider" min="0" max="100" value="50">
+                    <span id="sileroThresholdValue">0.50</span>
+                </div>
+
+                <div class="status-item loading" id="sileroLoading">
+                    <span>⏳ 加载模型中...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 触发记录对比 -->
+        <div class="section">
+            <h2>📝 触发记录对比</h2>
+            <div class="record-header">
+                <span class="col-time">时间</span>
+                <span class="col-legacy">频率分析 VAD</span>
+                <span class="col-silero">Silero VAD</span>
+            </div>
+            <div class="record-container" id="recordContainer">
+                <div class="record-entry">等待开始测试...</div>
+            </div>
+            <button class="clear-btn" id="clearRecordBtn">清空记录</button>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div class="control-buttons">
+            <button class="control-btn start-btn" id="startBtn">🎤 开始测试</button>
+            <button class="control-btn stop-btn" id="stopBtn" disabled>⏹️ 停止测试</button>
+        </div>
+    </div>
+
+    <script type="module" src="js/test_webrtcvad_voice.js"></script>
+</body>
+
+</html>

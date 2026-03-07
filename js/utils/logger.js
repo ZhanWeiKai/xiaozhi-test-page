@@ -1,13 +1,28 @@
 import { getLogContainer } from '../ui/dom-helper.js'
 
-const logContainer = getLogContainer();
 // 日志记录函数
 export function log(message, type = 'info') {
     // 将消息按换行符分割成多行
     const lines = message.split('\n');
     const now = new Date();
-    // const timestamp = `[${now.toLocaleTimeString()}] `;
     const timestamp = `[${now.toLocaleTimeString()}.${now.getMilliseconds().toString().padStart(3, '0')}] `;
+
+    // 始终输出到控制台
+    const consoleMsg = `${timestamp}${message}`;
+    if (type === 'error') {
+        console.error(consoleMsg);
+    } else if (type === 'warning') {
+        console.warn(consoleMsg);
+    } else {
+        console.log(consoleMsg);
+    }
+
+    // 尝试获取日志容器，如果不存在则跳过DOM操作
+    const logContainer = getLogContainer();
+    if (!logContainer) {
+        return;
+    }
+
     // 为每一行创建日志条目
     lines.forEach((line, index) => {
         const logEntry = document.createElement('div');
