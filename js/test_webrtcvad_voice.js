@@ -12,6 +12,12 @@ class VadComparisonController {
         this.sileroThreshold = 0.5;
         this.lastSileroConfidence = 0;  // 记录上次置信度
         this.sileroFrameCount = 0;       // 帧计数器
+        this.sileroLowConfidenceFrames = 0;  // 连续低置信度帧计数器（用于手动停止检测）
+        this.sileroForceStopThreshold = 10;  // 连续10帧（约0.2秒）低于阈值就强制停止
+
+        // 调试统计
+        this.debugFrameCount = 0;  // onFrameProcessed 总调用次数
+        this.debugForceStopCount = 0;  // 强制停止触发次数
 
         // 状态
         this.isListening = false;
@@ -150,23 +156,48 @@ class VadComparisonController {
                     // 调整参数：更严格的语音检测，过滤杂音
                     positiveSpeechThreshold: 0.7,   // 提高阈值，需要更高置信度才认为是语音
                     negativeSpeechThreshold: 0.5,   // 相应提高停止阈值
-                    minSpeechFrames: 5,             // 至少5帧才触发（约100ms），过滤短促噪音
+                    minSpeechFrames: 10,            // 至少10帧才触发（约200ms），过滤短促噪音
                     onFrameProcessed: (probs) => {
                         // 每帧处理时更新置信度显示
                         // probs 格式: { isSpeech: number, notSpeech: number }
-                        // 先打印完整对象看看结构
-                        console.log('[Silero VAD] probs:', probs);
-
                         const prob = probs?.isSpeech ?? probs?.speech ?? 0;
                         this.updateSileroConfidence(prob);
 
-                        // 在页面上显示调试信息
-                        const status = this.sileroIsSpeaking ? '说话中' : '静音';
-                        this.elements.sileroDebugInfo.textContent = `[Silero VAD] 置信度: ${prob.toFixed(3)}, 状态: ${status}`;
+                        // 调试：记录帧处理次数
+                        this.debugFrameCount++;
+
+                        // 手动停止检测：连续N帧低于阈值就强制停止
+                        if (this.sileroIsSpeaking) {
+                            if (prob < 0.5) {
+                                this.sileroLowConfidenceFrames++;
+                                // 在页面上显示详细调试信息
+                                this.elements.sileroDebugInfo.innerHTML =
+                                    `<span style="color: #ff9800;">[Silero VAD] 置信度: ${prob.toFixed(3)}</span><br>` +
+                                    `<span style="color: #f44336;">⚠️ 低置信帧: ${this.sileroLowConfidenceFrames}/${this.sileroForceStopThreshold}</span><br>` +
+                                    `<span>总帧数: ${this.debugFrameCount} | 说话中: ${this.sileroIsSpeaking}</span>`;
+
+                                // 连续100帧（约2秒）低于0.5就强制停止
+                                if (this.sileroLowConfidenceFrames >= this.sileroForceStopThreshold) {
+                                    this.forceStopSileroRecording();
+                                }
+                            } else {
+                                // 置信度恢复，重置计数器
+                                this.sileroLowConfidenceFrames = 0;
+                                this.elements.sileroDebugInfo.innerHTML =
+                                    `<span style="color: #4caf50;">[Silero VAD] 置信度: ${prob.toFixed(3)}</span><br>` +
+                                    `<span>总帧数: ${this.debugFrameCount} | 说话中: ${this.sileroIsSpeaking}</span>`;
+                            }
+                        } else {
+                            // 不在说话状态，正常显示
+                            this.elements.sileroDebugInfo.innerHTML =
+                                `<span>[Silero VAD] 置信度: ${prob.toFixed(3)}</span><br>` +
+                                `<span>总帧数: ${this.debugFrameCount} | 等待语音...</span>`;
+                        }
                     },
                     onSpeechStart: () => {
                         if (!this.sileroIsSpeaking) {
                             this.sileroIsSpeaking = true;
+                            this.sileroLowConfidenceFrames = 0;  // 重置低置信度计数器
                             this.addRecord('silero', '🎯 开始说话');
                         }
                         this.updateSileroStatus(true);
@@ -275,6 +306,44 @@ class VadComparisonController {
         } else {
             this.elements.sileroStatus.textContent = '🔇 静音中';
             this.elements.sileroStatus.className = 'status-value silence';
+        }
+    }
+
+    // 强制停止 Silero VAD 录音（手动检测停止条件）
+    forceStopSileroRecording() {
+        if (!this.sileroIsSpeaking) return;
+
+        this.debugForceStopCount++;
+        console.log('[Silero VAD] 🔴 手动强制停止录音！', {
+            lowConfidenceFrames: this.sileroLowConfidenceFrames,
+            threshold: this.sileroForceStopThreshold,
+            totalFrames: this.debugFrameCount,
+            forceStopCount: this.debugForceStopCount
+        });
+
+        // 重置状态
+        this.sileroIsSpeaking = false;
+        this.sileroLowConfidenceFrames = 0;
+
+        // 更新 UI 状态
+        this.updateSileroStatus(false);
+        this.addRecord('silero', `🛑 强制停止 #${this.debugForceStopCount} (连续${this.sileroForceStopThreshold}帧低置信)`);
+
+        // 在调试区域显示强制停止信息
+        this.elements.sileroDebugInfo.innerHTML =
+            `<span style="color: #f44336; font-weight: bold;">🔴 强制停止已触发 #${this.debugForceStopCount}</span><br>` +
+            `<span>正在重新启动监听...</span>`;
+
+        // 调用库的 pause 方法停止录音
+        if (this.sileroVad) {
+            this.sileroVad.pause();
+            // 重新启动以继续监听下一次语音
+            setTimeout(() => {
+                if (this.isListening && this.sileroVad) {
+                    console.log('[Silero VAD] 重新启动监听');
+                    this.sileroVad.start();
+                }
+            }, 100);
         }
     }
 
