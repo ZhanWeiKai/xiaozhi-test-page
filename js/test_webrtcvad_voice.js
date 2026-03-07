@@ -144,6 +144,10 @@ class VadComparisonController {
             // 初始化并启动 Silero VAD (使用全局 vad.MicVAD)
             if (vad?.MicVAD && !this.sileroVad) {
                 this.sileroVad = await vad.MicVAD.new({
+                    // 调整参数：更严格的语音检测，过滤杂音
+                    positiveSpeechThreshold: 0.7,   // 提高阈值，需要更高置信度才认为是语音
+                    negativeSpeechThreshold: 0.5,   // 相应提高停止阈值
+                    minSpeechFrames: 5,             // 至少5帧才触发（约100ms），过滤短促噪音
                     onSpeechStart: () => {
                         if (!this.sileroIsSpeaking) {
                             this.sileroIsSpeaking = true;
