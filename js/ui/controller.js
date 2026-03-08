@@ -470,15 +470,6 @@ export class UIController {
                 onSpeechStart: () => {
                     log('[Silero VAD] onSpeechStart 回调被触发', 'info');
 
-                    // 检查 AI 是否正在说话，如果是则忽略 VAD 触发
-                    const wsHandler = getWebSocketHandler();
-                    log(`[Silero VAD] isRemoteSpeaking: ${wsHandler.isRemoteSpeaking}`, 'info');
-
-                    if (wsHandler.isRemoteSpeaking) {
-                        log('[Silero VAD] AI正在说话，忽略VAD触发', 'warning');
-                        return;
-                    }
-
                     if (!this.sileroIsSpeaking) {
                         this.sileroIsSpeaking = true;
                         this.sileroLowConfidenceFrames = 0;
