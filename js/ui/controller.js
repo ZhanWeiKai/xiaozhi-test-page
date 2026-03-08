@@ -3,7 +3,7 @@ import { loadConfig, saveConfig } from '../config/manager.js';
 import { getAudioRecorder } from '../core/audio/recorder.js';
 import { getWebSocketHandler } from '../core/network/websocket.js';
 import { getAudioPlayer } from '../core/audio/player.js';
-import { getVADDetector } from '../core/audio/vad.js';
+import { log } from '../utils/logger.js';
 
 // UI控制器类
 export class UIController {
@@ -13,7 +13,21 @@ export class UIController {
         this.visualizerContext = null;
         this.audioStatsTimer = null;
         this.isAutoRecordEnabled = false;  // 自动录音检测开关
-        this.vad = null;  // VAD检测器
+
+        // Silero VAD 相关状态
+        this.sileroVad = null;                    // MicVAD 实例
+        this.sileroIsSpeaking = false;            // 当前是否在说话
+        this.sileroLowConfidenceFrames = 0;       // 连续低置信度帧计数器
+        this.sileroForceStopThreshold = 10;       // 连续10帧(~200ms)低于阈值强制停止
+
+        // 预缓冲相关
+        this.preBufferSize = 1000;                // 预缓冲大小 (ms)
+        this.pcmBuffer = null;                    // 环形缓冲区
+        this.bufferWriteIndex = 0;                // 写入位置
+        this.bufferedSamples = 0;                 // 已缓冲的样本数
+        this.audioContext = null;                 // AudioContext
+        this.audioProcessor = null;               // 音频处理器
+        this.mediaStream = null;                  // 媒体流
     }
 
     // 初始化
@@ -359,60 +373,311 @@ export class UIController {
         }
     }
 
-    // 启动VAD检测
+    // 启动VAD检测 (使用 Silero VAD + 预缓冲)
     async startVAD() {
-        if (this.vad) {
-            this.vad.stop();
-        }
-
-        // 创建VAD检测器，设置参数
-        this.vad = getVADDetector({
-            volumeThreshold: 12,    // 音量阈值
-            startDelay: 200,        // 开始触发延迟 200ms
-            stopDelay: 1200         // 停止触发延迟 1200ms
-        });
-
-        // 设置VAD回调
         const audioRecorder = getAudioRecorder();
         const recordButton = document.getElementById('recordButton');
 
-        this.vad.onStartRecording = () => {
-            // VAD触发开始录音 - 直接调用录音器方法
-            if (!audioRecorder.isRecording) {
-                audioRecorder.start();
+        try {
+            // 如果已有实例，先销毁
+            if (this.sileroVad) {
+                this.sileroVad.destroy();
+                this.sileroVad = null;
             }
-        };
 
-        this.vad.onBufferedAudio = (pcmData) => {
-            // 发送预缓冲的音频数据
-            audioRecorder.sendBufferedAudio(pcmData);
-        };
+            // 清理旧的预缓冲资源
+            this._cleanupPreBuffer();
 
-        this.vad.onStopRecording = () => {
-            // VAD触发停止录音 - 直接调用录音器方法
-            if (audioRecorder.isRecording) {
-                audioRecorder.stop();
+            console.log('[Silero VAD] 开始初始化...');
+
+            // ========== 步骤1: 初始化预缓冲 ==========
+            // 先获取麦克风流用于预缓冲
+            this.mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 16000,
+                    channelCount: 1
+                }
+            });
+
+            // 创建 AudioContext 用于预缓冲
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000,
+                latencyHint: 'interactive'
+            });
+
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
             }
-        };
 
-        // 启动VAD监听
-        const success = await this.vad.start();
-        if (success) {
+            // 创建音频源
+            const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+
+            // 创建 ScriptProcessorNode 用于采集 PCM 数据
+            const bufferSize = 4096;
+            this.audioProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+            source.connect(this.audioProcessor);
+
+            // 初始化预缓冲区 (1秒 = 16000 样本)
+            this.pcmBuffer = new Int16Array(16000);
+            this.bufferWriteIndex = 0;
+            this.bufferedSamples = 0;
+
+            // 连接静音输出（避免回声）
+            const silentGain = this.audioContext.createGain();
+            silentGain.gain.value = 0;
+            this.audioProcessor.connect(silentGain);
+            silentGain.connect(this.audioContext.destination);
+
+            // PCM 数据缓冲处理
+            this.audioProcessor.onaudioprocess = (event) => {
+                const inputData = event.inputBuffer.getChannelData(0);
+                this._bufferPCMData(inputData);
+            };
+
+            console.log('[Silero VAD] 预缓冲初始化完成');
+
+            // ========== 步骤2: 创建 Silero VAD 实例 ==========
+            this.sileroVad = await vad.MicVAD.new({
+                // 语音检测参数
+                positiveSpeechThreshold: 0.7,   // 开始说话阈值
+                negativeSpeechThreshold: 0.5,   // 停止说话阈值
+                minSpeechFrames: 10,            // 最少10帧才触发开始 (~200ms)
+
+                // 每帧处理回调
+                onFrameProcessed: (probs) => {
+                    const prob = probs?.isSpeech ?? 0;
+
+                    // 更新置信度显示
+                    this._updateVadConfidenceDisplay(prob);
+
+                    // 手动强制停止检测：仅在"说话中"状态才检测
+                    if (this.sileroIsSpeaking && prob < 0.5) {
+                        this.sileroLowConfidenceFrames++;
+
+                        if (this.sileroLowConfidenceFrames >= this.sileroForceStopThreshold) {
+                            console.log('[Silero VAD] 触发强制停止');
+                            this.forceStopSileroRecording();
+                        }
+                    } else {
+                        // 置信度恢复，重置计数器
+                        this.sileroLowConfidenceFrames = 0;
+                    }
+                },
+
+                // 开始说话回调
+                onSpeechStart: () => {
+                    log('[Silero VAD] onSpeechStart 回调被触发', 'info');
+
+                    // 检查 AI 是否正在说话，如果是则忽略 VAD 触发
+                    const wsHandler = getWebSocketHandler();
+                    log(`[Silero VAD] isRemoteSpeaking: ${wsHandler.isRemoteSpeaking}`, 'info');
+
+                    if (wsHandler.isRemoteSpeaking) {
+                        log('[Silero VAD] AI正在说话，忽略VAD触发', 'warning');
+                        return;
+                    }
+
+                    if (!this.sileroIsSpeaking) {
+                        this.sileroIsSpeaking = true;
+                        this.sileroLowConfidenceFrames = 0;
+                        log('[Silero VAD] 触发开始录音', 'success');
+
+                        // ========== 发送预缓冲音频 ==========
+                        const bufferedData = this._getBufferedAudio();
+                        if (bufferedData && bufferedData.length > 0) {
+                            log(`[Silero VAD] 发送预缓冲音频: ${bufferedData.length} 样本`, 'info');
+                            audioRecorder.sendBufferedAudio(bufferedData);
+                        }
+
+                        // ========== 触发开始录音 ==========
+                        log(`[Silero VAD] audioRecorder.isRecording: ${audioRecorder.isRecording}`, 'info');
+                        if (!audioRecorder.isRecording) {
+                            audioRecorder.start();
+                        }
+                    }
+                },
+
+                // 停止说话回调
+                onSpeechEnd: (audio) => {
+                    if (this.sileroIsSpeaking) {
+                        this.sileroIsSpeaking = false;
+                        const duration = (audio.length / 16000).toFixed(2);
+                        console.log(`[Silero VAD] 触发停止录音 (${duration}s)`);
+
+                        // ========== 触发停止录音 ==========
+                        if (audioRecorder.isRecording) {
+                            audioRecorder.stop();
+                        }
+                    }
+                }
+            });
+
+            // 启动监听
+            this.sileroVad.start();
+            console.log('[Silero VAD] 初始化完成，开始监听');
+
+            // 显示置信度显示区域
+            const vadConfidenceDisplay = document.getElementById('vadConfidenceDisplay');
+            if (vadConfidenceDisplay) {
+                vadConfidenceDisplay.style.display = 'block';
+            }
+
+            // 更新按钮样式
             recordButton.style.opacity = '0.6';
             recordButton.style.cursor = 'default';
+
+        } catch (error) {
+            console.error('[Silero VAD] 初始化失败:', error);
+            alert('Silero VAD 初始化失败: ' + error.message);
+        }
+    }
+
+    // 将 Float32 PCM 数据存入环形缓冲区
+    _bufferPCMData(float32Data) {
+        if (!this.pcmBuffer) return;
+
+        // 将 Float32 (-1.0 ~ 1.0) 转换为 Int16 (-32768 ~ 32767)
+        for (let i = 0; i < float32Data.length; i++) {
+            const sample = Math.max(-1, Math.min(1, float32Data[i]));
+            const int16Sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+
+            this.pcmBuffer[this.bufferWriteIndex] = int16Sample;
+            this.bufferWriteIndex = (this.bufferWriteIndex + 1) % this.pcmBuffer.length;
+
+            if (this.bufferedSamples < this.pcmBuffer.length) {
+                this.bufferedSamples++;
+            }
+        }
+    }
+
+    // 获取预缓冲的 PCM 数据
+    _getBufferedAudio() {
+        if (!this.pcmBuffer || this.bufferedSamples === 0) {
+            return null;
+        }
+
+        // 创建结果数组
+        const result = new Int16Array(this.bufferedSamples);
+
+        // 计算读取起始位置（环形缓冲区中最早的数据）
+        const startIndex = (this.bufferWriteIndex - this.bufferedSamples + this.pcmBuffer.length) % this.pcmBuffer.length;
+
+        // 从环形缓冲区复制数据
+        for (let i = 0; i < this.bufferedSamples; i++) {
+            const readIndex = (startIndex + i) % this.pcmBuffer.length;
+            result[i] = this.pcmBuffer[readIndex];
+        }
+
+        return result;
+    }
+
+    // 清理预缓冲资源
+    _cleanupPreBuffer() {
+        if (this.audioProcessor) {
+            this.audioProcessor.disconnect();
+            this.audioProcessor.onaudioprocess = null;
+            this.audioProcessor = null;
+        }
+
+        if (this.audioContext) {
+            this.audioContext.close();
+            this.audioContext = null;
+        }
+
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
+        }
+
+        this.pcmBuffer = null;
+        this.bufferWriteIndex = 0;
+        this.bufferedSamples = 0;
+    }
+
+    // 强制停止 Silero VAD 录音（手动检测停止条件）
+    forceStopSileroRecording() {
+        const audioRecorder = getAudioRecorder();
+
+        // 重置状态
+        this.sileroIsSpeaking = false;
+        this.sileroLowConfidenceFrames = 0;
+
+        // ========== 触发停止录音 ==========
+        if (audioRecorder.isRecording) {
+            audioRecorder.stop();
+        }
+
+        // 暂停并重启监听
+        if (this.sileroVad) {
+            this.sileroVad.pause();
+            setTimeout(() => {
+                if (this.isAutoRecordEnabled && this.sileroVad) {
+                    this.sileroVad.start();
+                }
+            }, 100);
         }
     }
 
     // 停止VAD检测
     stopVAD() {
-        if (this.vad) {
-            this.vad.stop();
-            this.vad = null;
+        // 清理 Silero VAD
+        if (this.sileroVad) {
+            this.sileroVad.pause();
+            this.sileroVad.destroy();
+            this.sileroVad = null;
+        }
+
+        // 清理预缓冲资源
+        this._cleanupPreBuffer();
+
+        // 重置状态
+        this.sileroIsSpeaking = false;
+        this.sileroLowConfidenceFrames = 0;
+
+        // 隐藏置信度显示区域
+        const vadConfidenceDisplay = document.getElementById('vadConfidenceDisplay');
+        if (vadConfidenceDisplay) {
+            vadConfidenceDisplay.style.display = 'none';
         }
 
         const recordButton = document.getElementById('recordButton');
         recordButton.style.opacity = '1';
         recordButton.style.cursor = 'pointer';
+
+        console.log('[Silero VAD] 已停止');
+    }
+
+    // 更新 VAD 置信度显示
+    _updateVadConfidenceDisplay(prob) {
+        const confidenceValue = document.getElementById('vadConfidenceValue');
+        const statusFill = document.getElementById('vadStatusFill');
+        const statusText = document.getElementById('vadStatusText');
+
+        if (!confidenceValue || !statusFill || !statusText) return;
+
+        // 更新数值
+        confidenceValue.textContent = prob.toFixed(2);
+
+        // 更新进度条 (0-100%)
+        const percentage = Math.round(prob * 100);
+        statusFill.style.width = percentage + '%';
+
+        // 根据置信度设置颜色和状态文字
+        if (prob >= 0.7) {
+            statusFill.style.background = '#4CAF50'; // 绿色 - 说话中
+            statusText.textContent = '说话';
+            statusText.style.color = '#4CAF50';
+        } else if (prob >= 0.5) {
+            statusFill.style.background = '#FF9800'; // 橙色 - 可能说话
+            statusText.textContent = '可能';
+            statusText.style.color = '#FF9800';
+        } else {
+            statusFill.style.background = '#9E9E9E'; // 灰色 - 静音
+            statusText.textContent = '静音';
+            statusText.style.color = '#9E9E9E';
+        }
     }
 }
 

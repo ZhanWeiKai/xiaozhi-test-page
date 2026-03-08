@@ -245,6 +245,11 @@ export class AudioRecorder {
 
     // 开始录音
     async start() {
+        // 调试：打印调用栈到页面
+        const stack = new Error().stack;
+        log('[Recorder] start() 被调用', 'info');
+        log(`[Recorder] 调用栈: ${stack?.split('\n').slice(0, 3).join(' → ')}`, 'info');
+
         if (this.isRecording) return false;
 
         try {

@@ -29,6 +29,12 @@
             });
         }
     </script>
+    <!-- Silero VAD 依赖 (ONNX Runtime 1.14.0 + VAD 0.0.22) -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.min.js"></script>
+    <script>
+        ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/';
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js"></script>
 </head>
 
 <body>
@@ -86,8 +92,8 @@
                     </button>
                 </h2>
                 <div class="connection-controls">
-                    <input type="text" id="otaUrl" value="http://10.88.1.141:8002/xiaozhi/ota/"
-                        placeholder="OTA服务器地址，如：http://10.88.1.141:8002/xiaozhi/ota/" />
+                    <input type="text" id="otaUrl" value="https://hands-bar-gates-may.trycloudflare.com/xiaozhi/ota/"
+                        placeholder="OTA服务器地址" />
                     <input type="text" id="serverUrl" value="" readonly disabled placeholder="点击连接按钮后，自动从OTA接口获取" />
                 </div>
             </div>
@@ -115,6 +121,14 @@
                         <span class="toggle-slider-small"></span>
                         <span class="toggle-text">自动录音</span>
                     </label>
+                </div>
+                <div id="vadConfidenceDisplay" style="display: none; margin: 8px 0; font-size: 12px; color: #666; background: #f5f5f5; padding: 6px 10px; border-radius: 4px;">
+                    <span>Silero VAD: </span>
+                    <span id="vadConfidenceValue" style="font-family: monospace; font-weight: bold; color: #2196F3;">0.00</span>
+                    <span id="vadStatusBar" style="display: inline-block; width: 60px; height: 8px; background: #ddd; border-radius: 4px; vertical-align: middle; margin-left: 8px;">
+                        <span id="vadStatusFill" style="display: block; height: 100%; background: #4CAF50; border-radius: 4px; width: 0%; transition: width 0.1s;"></span>
+                    </span>
+                    <span id="vadStatusText" style="margin-left: 6px; font-weight: bold; color: #666;">静音</span>
                 </div>
                 <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
             </div>

@@ -23,7 +23,16 @@ export async function webSocketConnect(otaUrl, config) {
     }
 
     // 使用OTA返回的websocket URL
-    let connUrl = new URL(websocket.url);
+    // 如果是内网地址，替换为HTTPS隧道地址（解决混合内容问题）
+    let wsUrl = websocket.url;
+    log(`[DEBUG] 原始WebSocket URL: ${wsUrl}`, 'info');
+    if (wsUrl.includes('10.88.1.141:8000')) {
+        wsUrl = wsUrl.replace('ws://10.88.1.141:8000', 'wss://pavilion-immigration-taylor-paul.trycloudflare.com');
+        log(`[DEBUG] 检测到内网地址，已替换为HTTPS隧道: ${wsUrl}`, 'info');
+    } else {
+        log(`[DEBUG] 未匹配到内网地址，使用原始URL`, 'info');
+    }
+    let connUrl = new URL(wsUrl);
 
     // 添加token参数（从OTA响应中获取）
     if (websocket.token) {

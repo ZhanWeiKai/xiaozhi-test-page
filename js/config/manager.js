@@ -47,7 +47,15 @@ export function loadConfig() {
 
     const savedOtaUrl = localStorage.getItem('xz_tester_otaUrl');
     if (savedOtaUrl) {
-        otaUrlInput.value = savedOtaUrl;
+        // 如果是旧的内网地址，自动替换为HTTPS隧道地址
+        if (savedOtaUrl.includes('10.88.1.141')) {
+            const newOtaUrl = 'https://hands-bar-gates-may.trycloudflare.com/xiaozhi/ota/';
+            console.log('[OTA URL] 检测到旧地址，已自动替换为隧道地址:', newOtaUrl);
+            otaUrlInput.value = newOtaUrl;
+            localStorage.setItem('xz_tester_otaUrl', newOtaUrl);
+        } else {
+            otaUrlInput.value = savedOtaUrl;
+        }
     }
 }
 
