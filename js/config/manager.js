@@ -47,10 +47,10 @@ export function loadConfig() {
 
     const savedOtaUrl = localStorage.getItem('xz_tester_otaUrl');
     if (savedOtaUrl) {
-        // 如果是旧的内网地址，自动替换为HTTPS隧道地址
-        if (savedOtaUrl.includes('10.88.1.141')) {
-            const newOtaUrl = 'https://hands-bar-gates-may.trycloudflare.com/xiaozhi/ota/';
-            console.log('[OTA URL] 检测到旧地址，已自动替换为隧道地址:', newOtaUrl);
+        // 检测旧地址（内网地址或过期的临时隧道），自动替换为正式域名
+        if (savedOtaUrl.includes('10.88.1.') || savedOtaUrl.includes('trycloudflare.com')) {
+            const newOtaUrl = 'https://xiaozhi.jamesweb.org/api/ota/';
+            console.log('[OTA URL] 检测到旧地址，已自动替换为正式域名:', newOtaUrl);
             otaUrlInput.value = newOtaUrl;
             localStorage.setItem('xz_tester_otaUrl', newOtaUrl);
         } else {

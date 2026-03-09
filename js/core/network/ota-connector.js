@@ -23,14 +23,15 @@ export async function webSocketConnect(otaUrl, config) {
     }
 
     // 使用OTA返回的websocket URL
-    // 如果是内网地址，替换为HTTPS隧道地址（解决混合内容问题）
+    // OTA 服务器会根据 server.fronted_url 配置返回地址
+    // 但数据库配置的是内网地址(ws://10.88.1.141:8000)，需要替换为外网安全地址
     let wsUrl = websocket.url;
-    log(`[DEBUG] 原始WebSocket URL: ${wsUrl}`, 'info');
-    if (wsUrl.includes('10.88.1.141:8000')) {
-        wsUrl = wsUrl.replace('ws://10.88.1.141:8000', 'wss://pavilion-immigration-taylor-paul.trycloudflare.com');
-        log(`[DEBUG] 检测到内网地址，已替换为HTTPS隧道: ${wsUrl}`, 'info');
-    } else {
-        log(`[DEBUG] 未匹配到内网地址，使用原始URL`, 'info');
+    log(`[DEBUG] OTA返回的WebSocket URL: ${wsUrl}`, 'info');
+
+    // 替换内网地址为外网安全 WebSocket 地址
+    if (wsUrl.includes('10.88.1.141:8000') || wsUrl.includes('10.88.1.144:8000')) {
+        wsUrl = wsUrl.replace(/ws:\/\/10\.88\.1\.\d+:8000/, 'wss://xiaozhi-wstest.jamesweb.org');
+        log(`[DEBUG] 已替换为外网安全地址: ${wsUrl}`, 'info');
     }
     let connUrl = new URL(wsUrl);
 

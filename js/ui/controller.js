@@ -21,7 +21,7 @@ export class UIController {
         this.sileroForceStopThreshold = 10;       // 连续10帧(~200ms)低于阈值强制停止
 
         // 预缓冲相关
-        this.preBufferSize = 1000;                // 预缓冲大小 (ms)
+        this.preBufferSize = 1500;                // 预缓冲大小 (ms)
         this.pcmBuffer = null;                    // 环形缓冲区
         this.bufferWriteIndex = 0;                // 写入位置
         this.bufferedSamples = 0;                 // 已缓冲的样本数
@@ -443,7 +443,7 @@ export class UIController {
                 // 语音检测参数
                 positiveSpeechThreshold: 0.7,   // 开始说话阈值
                 negativeSpeechThreshold: 0.5,   // 停止说话阈值
-                minSpeechFrames: 10,            // 最少10帧才触发开始 (~200ms)
+                minSpeechFrames: 6,             // 最少6帧才触发开始 (~120ms)
 
                 // 每帧处理回调
                 onFrameProcessed: (probs) => {
