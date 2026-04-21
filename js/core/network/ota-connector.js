@@ -22,17 +22,10 @@ export async function webSocketConnect(otaUrl, config) {
         return;
     }
 
-    // 使用OTA返回的websocket URL
-    // OTA 服务器会根据 server.fronted_url 配置返回地址
-    // 但数据库配置的是内网地址(ws://10.88.1.141:8000)，需要替换为外网安全地址
+    // 直接使用OTA返回的websocket URL（智控台已配置好外网地址）
     let wsUrl = websocket.url;
-    log(`[DEBUG] OTA返回的WebSocket URL: ${wsUrl}`, 'info');
+    log(`OTA返回的WebSocket URL: ${wsUrl}`, 'info');
 
-    // 替换内网地址为外网安全 WebSocket 地址
-    if (wsUrl.includes('10.88.1.141:8000') || wsUrl.includes('10.88.1.144:8000')) {
-        wsUrl = wsUrl.replace(/ws:\/\/10\.88\.1\.\d+:8000/, 'wss://xiaozhi-wstest.jamesweb.org');
-        log(`[DEBUG] 已替换为外网安全地址: ${wsUrl}`, 'info');
-    }
     let connUrl = new URL(wsUrl);
 
     // 添加token参数（从OTA响应中获取）
